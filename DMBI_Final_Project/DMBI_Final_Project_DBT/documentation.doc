@@ -1,0 +1,136 @@
+1. Which are the top 5 KO reasons, and which percentage of total KO 
+    represent each one?
+
+WITH SALES_FACT AS (
+SELECT 
+	KO_REASON_ID,
+	COUNT(KO_REASON_ID) AS KO_COUNT,
+    (COUNT(KO_REASON_ID) / (SELECT COUNT(KO_REASON_ID) FROM SALES_FACT) * 100) AS PERCENTAGE,
+    DENSE_RANK() OVER (ORDER BY COUNT(*) DESC) AS DENSE_RANK_NUM
+FROM SALES_FACT
+GROUP BY KO_REASON_ID
+ORDER BY KO_COUNT DESC
+)
+SELECT 
+	KO.KO_REASON,
+	KO_COUNT,
+	ROUND(PERCENTAGE, 2) AS PERCENTAGE
+FROM SALES_FACT SF
+LEFT JOIN DIM_KO_REASON KO
+	ON SF.KO_REASON_ID = KO.KO_REASON_ID
+WHERE DENSE_RANK_NUM <= 5;
+
+
+2. Which has been the month with more sales of customers that have 
+   contracted the cash financing type product? How many sales did that 
+   month have?
+
+WITH RANKED_SALES AS (
+    SELECT 
+        DATE_FORMAT(project_validation_date, '%Y-%m') AS SALES_MONTH,
+        COUNT(*) AS TOTAL_SALES,
+        DENSE_RANK() OVER (ORDER BY COUNT(*) DESC) AS DENSE_RANK_NUM
+    FROM SALES_FACT SF
+    LEFT JOIN DIM_FINANCE_TYPE FT
+    ON SF.FINANCE_TYPE_ID = FT.FINANCE_TYPE_ID
+    WHERE FT.FINANCE_TYPE = 'cash'
+    GROUP BY SALES_MONTH
+    HAVING SALES_MONTH IS NOT NULL
+)
+SELECT 
+    SALES_MONTH,
+    TOTAL_SALES
+FROM RANKED_SALES
+WHERE DENSE_RANK_NUM <= 1;  -- Adjust as needed to filter top N sales months
+
+
+3. To know if the price of installation affects the financing type, can you 
+   obtain a table that shows for each financing type the average 
+   installation price? Only consider the individual households for this 
+   indicator.
+
+SELECT 
+FIN.FINANCE_TYPE AS FINANCE_TYPE,
+ROUND(AVG(SALES.INSTALLATION_PRICE), 2) AS AVG_INSTALLATION_PRICE
+FROM SALES_FACT SALES
+LEFT JOIN DIM_CUSTOMER_TYPE CUST
+ON SALES.CUSTOMER_TYPE_ID = CUST.CUSTOMER_TYPE_ID AND CUST.CUSTOMER_TYPE = "Individual Household"
+LEFT JOIN DIM_FINANCE_TYPE FIN
+ON SALES.FINANCE_TYPE_ID = FIN.FINANCE_TYPE_ID
+GROUP BY FIN.FINANCE_TYPE;
+
+
+4. Only considering the zip codes with more than 5 leads, which is the 
+   average peak power, average installation price, number of leads per 
+   province?
+
+WITH LEADS_COUNT AS (
+	SELECT 
+		ZIPCODE,
+        COUNT(LEAD_ID) AS LEADS_COUNT,
+        SUM(INSTALLATION_PEAK_POWER_KW) AS INSTALLATION_PEAK_POWER,
+        SUM(INSTALLATION_PRICE) AS INSTALLATION_PRICE
+    FROM SALES_FACT
+    GROUP BY ZIPCODE
+    HAVING COUNT(LEAD_ID) > 5  -- Fixing HAVING clause
+)
+SELECT 
+	ZC.PROVINCE,
+    SUM(LC.LEADS_COUNT) AS NUM_LEADS_PER_PROVINCE,
+    ROUND(SUM(LC.INSTALLATION_PEAK_POWER) / SUM(LC.LEADS_COUNT), 2) AS AVG_PEAK_POWER,
+    ROUND(SUM(LC.INSTALLATION_PRICE) / SUM(LC.LEADS_COUNT), 2) AS AVG_INSTALLATION_PRICE
+FROM LEADS_COUNT LC
+	JOIN DIM_ZIPCODE ZC
+		ON LC.ZIPCODE = ZC.ZIPCODE
+GROUP BY ZC.PROVINCE
+ORDER BY NUM_LEADS_PER_PROVINCE DESC;
+
+
+
+5. Is average temperature correlated to the sales conversion? Provide a 
+   table that contains 3 columns: zip code, sales conversion and 
+   average temperature. The sales conversion is calculated dividing the 
+   sales done / leads of that zip code. To get the sales done you can filter 
+   the leads that are in the “Validated project” phase.
+
+WITH sales_done AS (
+SELECT
+	sf.zipcode,
+    COUNT(CASE WHEN sf.project_validation_date IS NOT NULL THEN 1 END) AS sales_done,
+    COUNT(LEAD_ID) AS LEADS_COUNT
+FROM sales_fact sf
+WHERE sf.current_phase = "Validated project" 
+GROUP BY sf.zipcode
+),
+lead_count AS (
+SELECT 
+	sf.zipcode,
+    COUNT(sf.lead_id) AS lead_count
+FROM sales_fact sf
+GROUP BY sf.zipcode
+),
+weather AS (
+SELECT 
+	zipcode,
+    AVG(temperature) AS avg_temperature
+FROM dim_weather
+GROUP BY zipcode
+)
+SELECT 
+	sd.zipcode,
+    sd.sales_done,
+    lc.lead_count,
+    ROUND(CASE 
+		WHEN lc.lead_count > 0 THEN (sd.sales_done / lc.lead_count) * 100
+            ELSE 0
+	END, 2) AS sales_conversion,
+	ROUND(w.avg_temperature, 2) AS avg_temperature
+FROM sales_done sd
+LEFT JOIN lead_count lc
+	ON sd.zipcode = lc.zipcode
+LEFT JOIN weather w
+	ON sd.zipcode = w.zipcode
+HAVING sd.zipcode IS NOT NULL
+ORDER BY sd.sales_done DESC;
+
+

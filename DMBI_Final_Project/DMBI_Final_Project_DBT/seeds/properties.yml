@@ -1,0 +1,14 @@
+version: 2
+
+seeds:
+  - name: meteo_raw
+    config:
+      delimiter: ";"
+
+  - name: sales_raw
+    config:
+      delimiter: ";"
+
+  - name: zipcode_raw
+    config:
+      delimiter: ","
